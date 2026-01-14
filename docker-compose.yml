@@ -1,0 +1,11 @@
+version: "3.8"
+
+services:
+  shipfast-api:
+    image: hirav2607/shipfast-api:latest
+    container_name: shipfast-api
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+    restart: always
