@@ -1,4 +1,4 @@
-name: ShipFast API - CI + Docker Publish
+name: ShipFast API CI/CD
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
 jobs:
   ci:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,13 +18,13 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install dependencies
+      - name: Install deps
         run: npm ci
 
       - name: Run tests
         run: npm test
 
-  docker:
+  build-and-push:
     needs: ci
     runs-on: ubuntu-latest
 
@@ -37,11 +38,29 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Build & Push Docker image
-        uses: docker/build-push-action@v6
+      - name: Build Docker image
+        run: |
+          docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest .
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
         with:
-          context: .
-          push: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
-            ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd ${{ secrets.VPS_PATH }}
+            docker-compose pull
+            docker-compose up -d --remove-orphans
+            docker image prune -f
