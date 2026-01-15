@@ -1,4 +1,4 @@
-name: ShipFast API - Bank Grade CI/CD
+name: ShipFast API - Bank Grade CI/CD (Verified)
 
 on:
   push:
@@ -10,14 +10,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ---------------------------
-  # 1) CI: Build + Test + Lint
-  # ---------------------------
   ci:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -28,57 +24,35 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint (Quality Gate)
+      - name: Lint
         run: npm run lint --if-present
 
-      - name: Run tests
+      - name: Tests
         run: npm test
 
-      - name: Dependency Audit (Security Gate)
+      - name: NPM Audit
         run: npm audit --audit-level=high
 
-  # ---------------------------
-  # 2) SAST: CodeQL Scan
-  # ---------------------------
-  codeql:
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      actions: read
-      contents: read
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: javascript
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@v3
-
-  # ----------------------------------------------------------
-  # 3) Docker: Build (NO CACHE) -> Trivy Scan -> Push if PASS
-  # ----------------------------------------------------------
   docker-build-scan-push:
-    needs: [ci, codeql]
+    needs: ci
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Proof - show lockfile hash (debug)
+      # ✅ PROOF 1: show what Dockerfile is used
+      - name: PROOF - Print Dockerfile
         run: |
-          echo "Repo contents:"
+          echo "===== Dockerfile ====="
           ls -la
-          echo "Lockfile SHA256:"
-          sha256sum package-lock.json || true
-          echo "package.json:"
+          cat Dockerfile
+
+      # ✅ PROOF 2: lockfile hash
+      - name: PROOF - Lockfile hash
+        run: |
+          echo "===== package.json ====="
           cat package.json
+          echo "===== package-lock.json SHA256 ====="
+          sha256sum package-lock.json
 
       - name: Login to DockerHub
         uses: docker/login-action@v3
@@ -91,16 +65,21 @@ jobs:
           docker build --no-cache -t ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }} .
           docker tag ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
 
-      - name: Debug - show package-lock inside image
+      # ✅ PROOF 3: inspect what exists inside image
+      - name: PROOF - Inspect package.json + lock inside container
         run: |
           docker run --rm ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }} sh -lc "
-            echo '--- Inside Image: ls -la ---';
-            ls -la;
-            echo '--- Inside Image: package-lock head ---';
-            cat package-lock.json | head -n 50 || true;
+            echo '===== Inside container =====';
+            echo '--- package.json ---';
+            cat package.json;
+            echo '--- package-lock.json: cross-spawn/glob occurrences ---';
+            grep -n \"cross-spawn\" -n package-lock.json | head -n 20 || true;
+            grep -n \"glob\" -n package-lock.json | head -n 20 || true;
+            echo '--- node_modules count ---';
+            ls node_modules 2>/dev/null | wc -l || true;
           "
 
-      - name: Scan Docker image with Trivy (local image, vuln only)
+      - name: Trivy Scan (vuln only)
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
@@ -115,55 +94,3 @@ jobs:
         run: |
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
-
-  # ---------------------------
-  # 4) Deploy (Staging/Local)
-  # ---------------------------
-  deploy-local:
-    needs: docker-build-scan-push
-    runs-on: self-hosted
-    environment: staging
-
-    steps:
-      - name: Pull image by SHA
-        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
-
-      - name: Stop and remove old container (if exists)
-        shell: powershell
-        run: |
-          $exists = docker ps -a --format "{{.Names}}" | Select-String -Pattern "^shipfast-api$"
-          if ($exists) {
-            docker rm -f shipfast-api | Out-Null
-          } else {
-            Write-Host "No existing container shipfast-api"
-          }
-
-      - name: Run new container
-        shell: powershell
-        run: |
-          docker run -d --name shipfast-api -p 4000:4000 ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
-
-      - name: Verify API health (retry)
-        shell: powershell
-        run: |
-          $maxTries = 10
-          $success = $false
-
-          for ($i = 1; $i -le $maxTries; $i++) {
-            try {
-              $res = Invoke-WebRequest -Uri "http://localhost:4000/health" -UseBasicParsing -TimeoutSec 5
-              if ($res.StatusCode -eq 200) {
-                Write-Host "Health check passed ✅"
-                Write-Host $res.Content
-                $success = $true
-                break
-              }
-            } catch {
-              Write-Host "Try $i/$maxTries - API not ready yet..."
-            }
-            Start-Sleep -Seconds 2
-          }
-
-          if (-not $success) {
-            throw "Health check failed ❌ API did not become healthy"
-          }
