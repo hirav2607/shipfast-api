@@ -6,6 +6,8 @@ COPY package*.json ./
 RUN npm ci --only=production
 
 COPY . .
+COPY package.json package-lock.json ./
+RUN npm ci --only=production
 
 EXPOSE 4000
 

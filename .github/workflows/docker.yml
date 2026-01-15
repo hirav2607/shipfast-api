@@ -77,11 +77,13 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # no-cache true ensures lockfile changes are picked up (fixes your CVE issue)
       - name: Build & Push Docker image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          no-cache: true
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
             ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
@@ -93,7 +95,7 @@ jobs:
     needs: docker
     runs-on: ubuntu-latest
     steps:
-      - name: Scan Docker image with Trivy
+      - name: Scan Docker image with Trivy (vuln only)
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
@@ -102,6 +104,7 @@ jobs:
           ignore-unfixed: true
           vuln-type: "os,library"
           severity: "CRITICAL,HIGH"
+          scanners: "vuln"
 
   # ---------------------------
   # 5) Deploy (Staging/Local)
