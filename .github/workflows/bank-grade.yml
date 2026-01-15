@@ -61,15 +61,24 @@ jobs:
       - name: Analyze
         uses: github/codeql-action/analyze@v3
 
-  # ---------------------------
-  # 3) Build & Push Docker
-  # ---------------------------
-  docker:
+  # ----------------------------------------------------------
+  # 3) Docker: Build (NO CACHE) -> Trivy Scan -> Push if PASS
+  # ----------------------------------------------------------
+  docker-build-scan-push:
     needs: [ci, codeql]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Proof - show lockfile hash (debug)
+        run: |
+          echo "Repo contents:"
+          ls -la
+          echo "Lockfile SHA256:"
+          sha256sum package-lock.json || true
+          echo "package.json:"
+          cat package.json
 
       - name: Login to DockerHub
         uses: docker/login-action@v3
@@ -77,25 +86,21 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # no-cache true ensures lockfile changes are picked up (fixes your CVE issue)
-      - name: Build & Push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          no-cache: true
-          tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
-            ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
+      - name: Build Docker image (NO CACHE)
+        run: |
+          docker build --no-cache -t ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }} .
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
 
-  # ---------------------------
-  # 4) Container Security Scan
-  # ---------------------------
-  trivy-scan:
-    needs: docker
-    runs-on: ubuntu-latest
-    steps:
-      - name: Scan Docker image with Trivy (vuln only)
+      - name: Debug - show package-lock inside image
+        run: |
+          docker run --rm ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }} sh -lc "
+            echo '--- Inside Image: ls -la ---';
+            ls -la;
+            echo '--- Inside Image: package-lock head ---';
+            cat package-lock.json | head -n 50 || true;
+          "
+
+      - name: Scan Docker image with Trivy (local image, vuln only)
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
@@ -106,11 +111,16 @@ jobs:
           severity: "CRITICAL,HIGH"
           scanners: "vuln"
 
+      - name: Push Docker image (only if scan passes)
+        run: |
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
+
   # ---------------------------
-  # 5) Deploy (Staging/Local)
+  # 4) Deploy (Staging/Local)
   # ---------------------------
   deploy-local:
-    needs: trivy-scan
+    needs: docker-build-scan-push
     runs-on: self-hosted
     environment: staging
 

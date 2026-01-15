@@ -2,13 +2,14 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-COPY package*.json ./
-RUN npm ci --only=production
-
-COPY . .
+# ✅ copy lockfile too (mandatory)
 COPY package.json package-lock.json ./
-RUN npm ci --only=production
+
+# ✅ install production only
+RUN npm ci --omit=dev
+
+# ✅ now copy source
+COPY . .
 
 EXPOSE 4000
-
 CMD ["node", "src/index.js"]
