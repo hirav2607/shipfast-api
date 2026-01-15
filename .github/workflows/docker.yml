@@ -1,4 +1,4 @@
-name: ShipFast API - CI + Docker Publish + Local Deploy
+name: ShipFast API - Bank Grade CI/CD
 
 on:
   push:
@@ -10,6 +10,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ---------------------------
+  # 1) CI: Build + Test + Lint
+  # ---------------------------
   ci:
     runs-on: ubuntu-latest
     steps:
@@ -25,11 +28,44 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Lint (Quality Gate)
+        run: npm run lint --if-present
+
       - name: Run tests
         run: npm test
 
+      - name: Dependency Audit (Security Gate)
+        run: npm audit --audit-level=high
+
+  # ---------------------------
+  # 2) SAST: CodeQL Scan
+  # ---------------------------
+  codeql:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript
+
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v3
+
+  # ---------------------------
+  # 3) Build & Push Docker
+  # ---------------------------
   docker:
-    needs: ci
+    needs: [ci, codeql]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -50,9 +86,30 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
             ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
 
-  deploy-local:
+  # ---------------------------
+  # 4) Container Security Scan
+  # ---------------------------
+  trivy-scan:
     needs: docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Scan Docker image with Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          severity: "CRITICAL,HIGH"
+
+  # ---------------------------
+  # 5) Deploy (Staging/Local)
+  # ---------------------------
+  deploy-local:
+    needs: trivy-scan
     runs-on: self-hosted
+    environment: staging
 
     steps:
       - name: Pull image by SHA
