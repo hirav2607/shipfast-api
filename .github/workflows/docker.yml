@@ -1,9 +1,13 @@
-name: ShipFast API - CI + Docker Publish
+name: ShipFast API - CI + Docker Publish + Local Deploy
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
+
+concurrency:
+  group: shipfast-api-main
+  cancel-in-progress: true
 
 jobs:
   ci:
@@ -16,17 +20,17 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: "npm"
 
       - name: Install dependencies
         run: npm ci
 
       - name: Run tests
         run: npm test
-  
+
   docker:
     needs: ci
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -43,26 +47,53 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
 
   deploy-local:
     needs: docker
     runs-on: self-hosted
 
     steps:
-      - name: Pull latest image
-        run: docker pull hirav2014/shipfast-api:latest
+      - name: Pull image by SHA
+        run: docker pull ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
 
       - name: Stop and remove old container (if exists)
         shell: powershell
         run: |
           $exists = docker ps -a --format "{{.Names}}" | Select-String -Pattern "^shipfast-api$"
           if ($exists) {
-            docker rm -f shipfast-api
+            docker rm -f shipfast-api | Out-Null
           } else {
             Write-Host "No existing container shipfast-api"
           }
 
       - name: Run new container
-        run: docker run -d --name shipfast-api -p 4000:4000 hirav2014/shipfast-api:latest
+        shell: powershell
+        run: |
+          docker run -d --name shipfast-api -p 4000:4000 ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
+
+      - name: Verify API health (retry)
+        shell: powershell
+        run: |
+          $maxTries = 10
+          $success = $false
+
+          for ($i = 1; $i -le $maxTries; $i++) {
+            try {
+              $res = Invoke-WebRequest -Uri "http://localhost:4000/health" -UseBasicParsing -TimeoutSec 5
+              if ($res.StatusCode -eq 200) {
+                Write-Host "Health check passed ✅"
+                Write-Host $res.Content
+                $success = $true
+                break
+              }
+            } catch {
+              Write-Host "Try $i/$maxTries - API not ready yet..."
+            }
+            Start-Sleep -Seconds 2
+          }
+
+          if (-not $success) {
+            throw "Health check failed ❌ API did not become healthy"
+          }
