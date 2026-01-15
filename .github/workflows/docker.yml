@@ -22,6 +22,19 @@ jobs:
 
       - name: Run tests
         run: npm test
+  deploy-local:
+    needs: docker
+    runs-on: self-hosted
+
+    steps:
+      - name: Pull latest image
+        run: docker pull hirav2014/shipfast-api:latest
+
+      - name: Stop old container
+        run: docker rm -f shipfast-api || true
+
+      - name: Run new container
+        run: docker run -d --name shipfast-api -p 4000:4000 hirav2014/shipfast-api:latest
 
   docker:
     needs: ci
