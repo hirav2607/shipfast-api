@@ -22,23 +22,7 @@ jobs:
 
       - name: Run tests
         run: npm test
-  deploy-local:
-    needs: docker
-    runs-on: self-hosted
-
-    steps:
-      - name: Pull latest image
-        run: docker pull hirav2014/shipfast-api:latest
-
-      - name: Stop and remove old container (if exists)
-        shell: powershell
-        run: |
-          docker rm -f shipfast-api 2>$null
-          exit 0
-
-      - name: Run new container
-        run: docker run -d --name shipfast-api -p 4000:4000 hirav2014/shipfast-api:latest
-
+  
   docker:
     needs: ci
     runs-on: ubuntu-latest
@@ -61,3 +45,24 @@ jobs:
           tags: |
             ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/shipfast-api:${{ github.sha }}
+
+  deploy-local:
+    needs: docker
+    runs-on: self-hosted
+
+    steps:
+      - name: Pull latest image
+        run: docker pull hirav2014/shipfast-api:latest
+
+      - name: Stop and remove old container (if exists)
+        shell: powershell
+        run: |
+          $exists = docker ps -a --format "{{.Names}}" | Select-String -Pattern "^shipfast-api$"
+          if ($exists) {
+            docker rm -f shipfast-api
+          } else {
+            Write-Host "No existing container shipfast-api"
+          }
+
+      - name: Run new container
+        run: docker run -d --name shipfast-api -p 4000:4000 hirav2014/shipfast-api:latest
